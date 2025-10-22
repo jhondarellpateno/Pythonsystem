@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TITAN GYM Online Booking System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            background-image: url("static/images/gymm.jpeg");
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-position: center;
+            font-family: 'Inter', sans-serif;
+            background-color: #000000;
+            color: #f0f0f0;
+        }
+        .titan-bg {
+            background-color: #1a1a1a;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0);
+        }
+        .titan-btn {
+            background-color: #ff5722; /* Deep Orange Accent */
+            color: #ffffff;
+            transition: transform 0.1s, background-color 0.1s;
+        }
+        .titan-btn:hover {
+            background-color: #e64a19;
+            transform: translateY(-1px);
+        }
+        .titan-input {
+            background-color: #2c2c2c;
+            border: 1px solid #444;
+            color: #f0f0f0;
+        }
+        .admin-text {
+            color: #00bcd4; /* Cyan accent for Admin */
+        }
+        .diet-tip-list li {
+            position: relative;
+            padding-left: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .diet-tip-list li::before {
+            content: '💪';
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.15s ease-out;
+        }
+        .hero-section {
+            background-image: url('https://placehold.co/1200x800/262626/ffffff?text=TITAN+GYM+POWER');
+            background-size: cover;
+            background-position: center;
+            min-height: 80vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            position: relative;
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+        .hero-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(2px);
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 sm:p-8 flex items-center justify-center">
+
+    <div id="app-container" class="w-full max-w-4xl rounded-xl p-0 md:p-0 titan-bg border-t-4 border-b-4 border-orange-600 overflow-hidden">
+        <div id="content">
+        </div>
+
+        <div id="message-box" class="fixed bottom-4 right-4 bg-green-600 text-white p-3 rounded-lg shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none"></div>
+
+    </div>
+
+    <script>
+        let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
+        let appData = { classes: [], bookings: [], users: [] };
+        const API_BASE = '/api';
+
+        const getAuthHeaders = () => {
+            const headers = { 'Content-Type': 'application/json' };
+            if (currentUser) {
+                headers['X-User-Id'] = currentUser.id;
+                headers['X-User-Role'] = currentUser.role;
+            }
+            return headers;
+        };
+
+        const apiFetch = async (endpoint, method = 'GET', body = null) => {
+            const options = {
+                method,
+                headers: getAuthHeaders(),
+            };
+            if (body) {
+                options.body = JSON.stringify(body);
+            }
+
+            try {
+                const response = await fetch(API_BASE + endpoint, options);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.message || `API Error: ${response.status}`);
+                }
+                return data;
+            } catch (error) {
+                console.error("Fetch error:", error);
+                throw error;
+            }
+        };
+
+        const showMessage = (message, isError = false) => {
+            const box = document.getElementById('message-box');
+            box.textContent = message;
+            box.className = `fixed bottom-4 right-4 text-white p-3 rounded-lg shadow-2xl opacity-100 transition-opacity duration-300`;
+            box.style.backgroundColor = isError ? '#dc2626' : '#10b981'; 
+            box.classList.remove('pointer-events-none');
+
+            setTimeout(() => {
+                box.classList.add('opacity-0');
+                box.classList.add('pointer-events-none');
+            }, 3000);
+        };
+        
+        const updateCurrentUser = (user) => {
+            currentUser = user;
+            if (user) {
+                localStorage.setItem('currentUser', JSON.stringify(user));
+            } else {
+                localStorage.removeItem('currentUser');
+            }
+            renderApp();
+        };
+
+
+        const login = async (username, password) => {
+            try {
+                const data = await apiFetch('/login', 'POST', { username, password });
+                updateCurrentUser(data.user);
+                showMessage(data.message);
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        const registerUser = async (username, password) => {
+            try {
+                const data = await apiFetch('/register', 'POST', { username, password });
+                showMessage(data.message);
+                renderLogin();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        const logout = () => {
+            updateCurrentUser(null);
+            showMessage("You have been logged out.");
+        };
+
+        const fetchAppData = async () => {
+            try {
+                const data = await apiFetch('/data');
+                appData = data;
+                return true;
+            } catch (error) {
+                showMessage(`Failed to fetch data: ${error.message}. Please log in again.`, true);
+                updateCurrentUser(null); 
+                return false;
+            }
+        };
+
+        
+        const processBooking = async (classId) => {
+            if (!currentUser || currentUser.role !== 'user') return showMessage("Please log in as a user to book classes.", true);
+
+            try {
+                const data = await apiFetch('/book', 'POST', { classId });
+                showMessage(data.message);
+                renderApp();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        const cancelBooking = async (bookingId) => {
+            if (!currentUser || currentUser.role !== 'user') return showMessage("Unauthorized action.", true);
+            
+            try {
+                const data = await apiFetch(`/booking/${bookingId}`, 'DELETE');
+                showMessage(data.message);
+                renderApp();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        
+        const approveBooking = async (bookingId) => {
+            try {
+                const data = await apiFetch(`/booking/${bookingId}/approve`, 'POST');
+                showMessage(data.message);
+                renderApp();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        const rejectBooking = async (bookingId) => {
+            try {
+                const data = await apiFetch(`/booking/${bookingId}/reject`, 'POST');
+                showMessage(data.message);
+                renderApp();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        const addClass = async (name, time, price, capacity, trainer) => {
+            if (!currentUser || currentUser.role !== 'admin') return showMessage("Admin access required.", true);
+
+            try {
+                const data = await apiFetch('/class', 'POST', { name, time, price, capacity, trainer });
+                showMessage(data.message);
+                renderApp();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        const removeClass = async (classId) => {
+            if (!currentUser || currentUser.role !== 'admin') return showMessage("Admin access required.", true);
+
+            try {
+                const data = await apiFetch(`/class/${classId}`, 'DELETE');
+                showMessage(data.message);
+                renderApp();
+            } catch (error) {
+                showMessage(error.message, true);
+            }
+        };
+
+        
+        const renderLandingPage = () => {
+             document.getElementById('app-container').classList.remove('p-6', 'md:p-10');
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="hero-section">
+                    <div class="hero-overlay"></div>
+                    <div class="relative z-10 p-6 md:p-12">
+                        <header class="mb-8">
+                            <h1 class="text-6xl sm:text-7xl font-extrabold text-orange-500 tracking-wider mb-2 drop-shadow-lg">TITAN GYM</h1>
+                            <p class="text-2xl sm:text-3xl font-light text-gray-200">Unleash Your Inner Titan.</p>
+                        </header>
+                        
+                        <p class="max-w-xl mx-auto text-xl text-gray-300 mb-10">
+                            Book the best classes with world-class trainers. Start your fitness journey today and forge your strength.
+                        </p>
+                        
+                        <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-6 justify-center">
+                            <button onclick="renderLogin()" class="titan-btn px-10 py-4 rounded-xl text-xl font-bold shadow-2xl">
+                                Login
+                            </button>
+                            <button onclick="renderRegister()" class="bg-cyan-500 hover:bg-cyan-600 text-black px-10 py-4 rounded-xl text-xl font-bold shadow-2xl transition">
+                                Join Now (Register)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderAdminDashboard = () => {
+             document.getElementById('app-container').classList.add('p-6', 'md:p-10');
+            const { classes, bookings, users } = appData;
+            
+            const pendingBookings = bookings.filter(b => b.status === 'pending');
+            const confirmedBookings = bookings.filter(b => b.status === 'confirmed');
+            
+            const getBookingListItem = (booking, index) => {
+                const user = users.find(u => u.id === booking.userId);
+                const classItem = classes.find(c => c.id === booking.classId);
+                const isOdd = index % 2 !== 0 ? 'bg-gray-800' : 'bg-gray-700';
+
+                return `
+                    <li class="${isOdd} p-3 flex justify-between items-center shadow-inner">
+                        <div class="flex-1 min-w-0">
+                            <p class="font-medium truncate">${classItem?.name || 'Deleted Class'}</p>
+                            <p class="text-xs text-gray-400">Trainer: ${classItem?.trainer || 'N/A'}</p>
+                            <p class="text-xs text-cyan-400">User: ${user?.username || 'Unknown'}</p>
+                        </div>
+                        <span class="text-orange-400 font-semibold mr-4">$${classItem?.price?.toFixed(2) || 'N/A'}</span>
+                        <div class="flex space-x-2">
+                            <button onclick="approveBooking('${booking.id}')" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs font-medium transition">Approve</button>
+                            <button onclick="rejectBooking('${booking.id}')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs font-medium transition">Reject</button>
+                        </div>
+                    </li>
+                `;
+            };
+
+            const pendingList = pendingBookings.map(getBookingListItem).join('');
+            
+            const confirmedList = confirmedBookings.map((booking, index) => {
+                const user = users.find(u => u.id === booking.userId);
+                const classItem = classes.find(c => c.id === booking.classId);
+                return `
+                    <li class="p-3 border-b border-gray-700 flex justify-between items-center hover:bg-gray-800 transition">
+                        <span class="font-medium w-1/3">${classItem?.name || 'Deleted Class'}</span>
+                        <span class="text-gray-400 w-1/3">${classItem?.trainer || 'N/A'}</span>
+                        <span class="text-green-400 w-1/3 text-right">Confirmed: ${user?.username || 'Unknown'}</span>
+                    </li>
+                `;
+            }).join('');
+
+
+            const classManagementList = classes.map(cls => `
+                <li class="p-3 bg-gray-700 rounded-lg mb-2 flex justify-between items-center shadow-md">
+                    <div>
+                        <p class="font-bold">${cls.name}</p>
+                        <p class="text-sm text-gray-400">${cls.time} | $${cls.price.toFixed(2)}</p>
+                        <p class="text-xs text-cyan-400">Trainer: ${cls.trainer}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-orange-400 font-semibold">${cls.currentBookings} / ${cls.capacity} confirmed</p>
+                        <button onclick="removeClass('${cls.id}')" class="text-sm text-red-400 hover:text-red-500 ml-4 font-medium">Remove Class</button>
+                    </div>
+                </li>
+            `).join('');
+
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-3">
+                    <h2 class="text-3xl font-bold admin-text">Admin Dashboard</h2>
+                    <button onclick="logout()" class="titan-btn px-4 py-2 rounded-lg text-sm">Logout</button>
+                </div>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Class Management Panel -->
+                    <div class="bg-gray-800 p-5 rounded-xl shadow-inner">
+                        <h3 class="text-2xl font-semibold mb-4 text-orange-400">Manage Classes</h3>
+                        
+                        <form id="add-class-form" class="mb-6 p-4 rounded-lg border border-gray-700">
+                            <h4 class="font-medium mb-3">Add New Class</h4>
+                            <input type="text" name="name" placeholder="Class Name (e.g., HIIT)" class="w-full mb-2 p-2 rounded titan-input" required>
+                            <input type="text" name="trainer" placeholder="Trainer Name (e.g., Jane Doe)" class="w-full mb-2 p-2 rounded titan-input" required>
+                            <input type="text" name="time" placeholder="Time (e.g., Fri 10:00 AM)" class="w-full mb-2 p-2 rounded titan-input" required>
+                            <input type="number" name="price" placeholder="Price (e.g., 15.00)" class="w-full mb-2 p-2 rounded titan-input" min="0" step="0.01" required>
+                            <input type="number" name="capacity" placeholder="Max Capacity (e.g., 20)" class="w-full mb-3 p-2 rounded titan-input" min="1" required>
+                            <button type="submit" class="w-full titan-btn py-2 rounded-lg text-sm">ADD CLASS</button>
+                        </form>
+
+                        <ul class="space-y-3">
+                            ${classManagementList || '<p class="text-gray-500">No classes currently scheduled.</p>'}
+                        </ul>
+                    </div>
+
+                    <!-- Pending Approvals Panel -->
+                    <div class="bg-gray-800 p-5 rounded-xl shadow-inner">
+                        <h3 class="text-2xl font-semibold mb-4 text-orange-400">Pending Approvals (${pendingBookings.length})</h3>
+                        <div class="max-h-96 overflow-y-auto border border-orange-600 rounded-lg">
+                            <ul class="divide-y divide-gray-700">
+                                ${pendingList || '<li class="p-3 text-gray-500 text-center">No bookings awaiting approval.</li>'}
+                            </ul>
+                        </div>
+                        
+                        <h3 class="text-2xl font-semibold mb-4 mt-6 text-orange-400">Confirmed Bookings (${confirmedBookings.length})</h3>
+                        <div class="max-h-56 overflow-y-auto border border-gray-700 rounded-lg">
+                            <ul class="divide-y divide-gray-700">
+                                ${confirmedList || '<li class="p-3 text-gray-500 text-center">No confirmed bookings yet.</li>'}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('add-class-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const form = e.target;
+                const name = form.name.value.trim();
+                const trainer = form.trainer.value.trim();
+                const time = form.time.value.trim();
+                const price = form.price.value.trim();
+                const capacity = form.capacity.value.trim();
+                if (name && trainer && time && price && capacity) {
+                    addClass(name, time, price, capacity, trainer);
+                    form.reset();
+                } else {
+                    showMessage("All fields are required.", true);
+                }
+            });
+        };
+
+        const renderUserDashboard = () => {
+            document.getElementById('app-container').classList.add('p-6', 'md:p-10');
+            const { classes, bookings, users } = appData;
+
+            const userConfirmedBookings = bookings.filter(b => b.userId === currentUser.id && b.status === 'confirmed');
+            const userPendingBookings = bookings.filter(b => b.userId === currentUser.id && b.status === 'pending');
+            const userOtherBookings = bookings.filter(b => b.userId === currentUser.id && (b.status === 'rejected' || b.status === 'cancelled'));
+            const userBookings = [...userPendingBookings, ...userConfirmedBookings, ...userOtherBookings];
+
+            const getStatusBadge = (status) => {
+                switch(status) {
+                    case 'confirmed': return `<span class="bg-green-600 text-xs font-semibold px-2 py-0.5 rounded-full">Confirmed</span>`;
+                    case 'pending': return `<span class="bg-yellow-600 text-xs font-semibold px-2 py-0.5 rounded-full">Pending Approval</span>`;
+                    case 'rejected': return `<span class="bg-red-600 text-xs font-semibold px-2 py-0.5 rounded-full">Rejected</span>`;
+                    case 'cancelled': return `<span class="bg-gray-500 text-xs font-semibold px-2 py-0.5 rounded-full">Cancelled</span>`;
+                    default: return `<span class="bg-gray-500 text-xs font-semibold px-2 py-0.5 rounded-full">Unknown</span>`;
+                }
+            };
+
+            const myBookingsList = userBookings.map(booking => {
+                const classItem = classes.find(c => c.id === booking.classId);
+                const canCancel = booking.status === 'confirmed' || booking.status === 'pending';
+
+                return `
+                    <li class="p-4 bg-gray-700 rounded-lg mb-3 flex justify-between items-center shadow-md">
+                        <div>
+                            <p class="font-bold">${classItem?.name || 'Deleted Class'}</p>
+                            <p class="text-sm text-gray-400">${classItem?.time || 'N/A'}</p>
+                            <p class="text-xs text-cyan-400">Trainer: ${classItem?.trainer || 'N/A'}</p>
+                        </div>
+                        <div class="text-right flex items-center space-x-3">
+                            ${getStatusBadge(booking.status)}
+                            ${canCancel ? `<button onclick="cancelBooking('${booking.id}')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm font-medium transition">Cancel</button>` : ''}
+                        </div>
+                    </li>
+                `;
+            }).join('');
+
+            const availableClassesList = classes.map(cls => {
+                const isBooked = bookings.some(b => b.userId === currentUser.id && b.classId === cls.id && (b.status === 'confirmed' || b.status === 'pending'));
+                const isFull = cls.currentBookings >= cls.capacity;
+                
+                let button;
+                if (isBooked) {
+                    button = `<button disabled class="bg-gray-500 px-3 py-1 rounded text-sm font-medium">Booked</button>`;
+                } else if (isFull) {
+                    button = `<button disabled class="bg-red-700 px-3 py-1 rounded text-sm font-medium">Full</button>`;
+                } else {
+                    button = `<button onclick="showPaymentModal('${cls.id}')" class="titan-btn px-3 py-1 rounded text-sm font-medium">Pay $${cls.price.toFixed(2)}</button>`;
+                }
+
+                return `
+                    <li class="p-4 border-b border-gray-700 flex justify-between items-center hover:bg-gray-800 transition">
+                        <div>
+                            <p class="font-bold">${cls.name}</p>
+                            <p class="text-gray-400 text-sm">${cls.time}</p>
+                            <p class="text-cyan-400 text-xs font-medium">Trainer: ${cls.trainer}</p>
+                        </div>
+                        <div class="text-right flex items-center space-x-4">
+                            <div class="text-sm">
+                                <p class="text-orange-400 font-bold">$${cls.price.toFixed(2)}</p>
+                                <p class="text-xs ${isFull ? 'text-red-500' : 'text-green-500'} mt-1">${cls.currentBookings} / ${cls.capacity} Confirmed</p>
+                            </div>
+                            ${button}
+                        </div>
+                    </li>
+                `;
+            }).join('');
+            
+            const dietSuggestions = `
+                <div class="bg-gray-800 p-5 rounded-xl shadow-xl border-t-2 border-orange-500 mt-8">
+                    <h3 class="text-2xl font-semibold mb-4 text-orange-400 flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Nutrition & Diet Suggestions
+                    </h3>
+                    <p class="text-gray-300 mb-4">Fueling your body correctly is just as important as the workout itself. Focus on these key areas for optimal results:</p>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div class="p-3 bg-gray-700 rounded-lg">
+                            <h4 class="font-bold text-lg text-green-400 mb-2">Protein Intake</h4>
+                            <ul class="diet-tip-list space-y-2 text-gray-200">
+                                <li>Aim for 1.6-2.2g of protein per kg of body weight daily.</li>
+                                <li>Eat protein with every major meal (chicken, fish, eggs, legumes).</li>
+                                <li>**Recovery:** Consume protein within 1-2 hours post-workout.</li>
+                            </ul>
+                        </div>
+                        <div class="p-3 bg-gray-700 rounded-lg">
+                            <h4 class="font-bold text-lg text-yellow-400 mb-2">Carbohydrates</h4>
+                            <ul class="diet-tip-list space-y-2 text-gray-200">
+                                <li>Consume complex carbs (oats, brown rice, sweet potatoes) for sustained energy.</li>
+                                <li>**Pre-Workout:** A small carb-rich snack 30-60 mins before training.</li>
+                                <li>**Timing:** Carbs replenish muscle glycogen after intense sessions.</li>
+                            </ul>
+                        </div>
+                        <div class="p-3 bg-gray-700 rounded-lg">
+                            <h4 class="font-bold text-lg text-blue-400 mb-2">Hydration & Fats</h4>
+                            <ul class="diet-tip-list space-y-2 text-gray-200">
+                                <li>Drink at least 3-4 liters of water daily.</li>
+                                <li>Healthy fats (avocado, nuts, olive oil) support hormone production.</li>
+                                <li>Monitor urine color—it should be pale yellow.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="flex justify-between items-center mb-6 border-b border-gray-700 pb-3">
+                    <h2 class="text-3xl font-bold text-orange-400">Welcome, ${currentUser.username}</h2>
+                    <button onclick="logout()" class="titan-btn px-4 py-2 rounded-lg text-sm">Logout</button>
+                </div>
+
+                <div class="space-y-8">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <!-- My Bookings Panel -->
+                        <div class="lg:col-span-1 bg-gray-800 p-5 rounded-xl shadow-inner">
+                            <h3 class="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">My Bookings (${userPendingBookings.length} Pending)</h3>
+                            <div class="max-h-96 overflow-y-auto">
+                                ${myBookingsList || '<p class="text-gray-500">You have no active bookings.</p>'}
+                            </div>
+                        </div>
+
+                        <!-- Available Classes Panel -->
+                        <div class="lg:col-span-2 bg-gray-800 p-5 rounded-xl shadow-inner">
+                            <h3 class="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">Available Classes</h3>
+                            <div class="max-h-96 overflow-y-auto border border-gray-700 rounded-lg">
+                                <ul class="divide-y divide-gray-700">
+                                    ${availableClassesList || '<li class="p-4 text-gray-500 text-center">No classes available.</li>'}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Nutrition & Diet Suggestions Panel -->
+                    ${dietSuggestions}
+                </div>
+            `;
+        };
+        
+        const renderLogin = () => {
+             document.getElementById('app-container').classList.add('p-6', 'md:p-10');
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-gray-800 rounded-lg shadow-lg">
+                    <h2 class="text-3xl font-semibold mb-6 text-center text-orange-400">Sign In</h2>
+                    <form id="login-form">
+                        <div class="mb-4">
+                            <label for="username" class="block text-sm font-medium mb-2">Username</label>
+                            <input type="text" id="username" name="username" class="w-full p-3 rounded-lg titan-input focus:ring-orange-500 focus:border-orange-500">
+                        </div>
+                        <div class="mb-6">
+                            <label for="password" class="block text-sm font-medium mb-2">Password</label>
+                            <input type="password" id="password" name="password" class="w-full p-3 rounded-lg titan-input focus:ring-orange-500 focus:border-orange-500">
+                        </div>
+                        <button type="submit" class="w-full titan-btn py-3 rounded-lg text-lg font-bold">LOGIN</button>
+                    </form>
+                    <p class="mt-4 text-center text-sm">
+                        Don't have an account? <a href="#" onclick="renderRegister()" class="text-cyan-400 hover:text-cyan-300 font-medium">Register here</a>
+                    </p>
+                    <p class="mt-4 text-center text-sm">
+                        <a href="#" onclick="renderLandingPage()" class="text-gray-400 hover:text-gray-300 font-medium">&larr; Back to Home</a>
+                    </p>
+                </div>
+            `;
+
+            document.getElementById('login-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const username = e.target.username.value.trim();
+                const password = e.target.password.value.trim();
+                login(username, password);
+            });
+        };
+        
+        const renderRegister = () => {
+             document.getElementById('app-container').classList.add('p-6', 'md:p-10');
+            const content = document.getElementById('content');
+            content.innerHTML = `
+                <div class="max-w-md mx-auto p-6 bg-gray-800 rounded-lg shadow-lg">
+                    <h2 class="text-3xl font-semibold mb-6 text-center text-orange-400">Create Account</h2>
+                    <form id="register-form">
+                        <div class="mb-4">
+                            <label for="reg-username" class="block text-sm font-medium mb-2">Choose Username</label>
+                            <input type="text" id="reg-username" name="username" class="w-full p-3 rounded-lg titan-input focus:ring-orange-500 focus:border-orange-500" required>
+                        </div>
+                        <div class="mb-6">
+                            <label for="reg-password" class="block text-sm font-medium mb-2">Create Password (Min. 6 characters)</label>
+                            <input type="password" id="reg-password" name="password" class="w-full p-3 rounded-lg titan-input focus:ring-orange-500 focus:border-orange-500" required>
+                        </div>
+                        <button type="submit" class="w-full titan-btn py-3 rounded-lg text-lg font-bold">REGISTER</button>
+                    </form>
+                    <p class="mt-4 text-center text-sm">
+                        Already have an account? <a href="#" onclick="renderLogin()" class="text-cyan-400 hover:text-cyan-300 font-medium">Login here</a>
+                    </p>
+                    <p class="mt-4 text-center text-sm">
+                        <a href="#" onclick="renderLandingPage()" class="text-gray-400 hover:text-gray-300 font-medium">&larr; Back to Home</a>
+                    </p>
+                </div>
+            `;
+
+            document.getElementById('register-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const username = e.target.username.value.trim();
+                const password = e.target.password.value.trim();
+                registerUser(username, password);
+            });
+        };
+        
+        const showPaymentModal = (classId) => {
+            if (!currentUser || currentUser.role !== 'user') return showMessage("Please log in as a user to book classes.", true);
+
+            const classToBook = appData.classes.find(c => c.id === classId);
+            if (!classToBook) return showMessage("Class not found.", true);
+
+            const existingBooking = appData.bookings.find(b => b.userId === currentUser.id && b.classId === classId && (b.status === 'confirmed' || b.status === 'pending'));
+            if (existingBooking) {
+                return showMessage(`You already have a ${existingBooking.status} booking for this class.`, true);
+            }
+            
+            const modalHTML = `
+                <div id="payment-modal-backdrop" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+                    <div class="bg-gray-800 p-6 rounded-xl max-w-sm w-full shadow-2xl border border-orange-600 animate-fade-in">
+                        <h3 class="text-2xl font-bold text-orange-400 mb-4">Confirm Payment</h3>
+                        <p class="mb-2 text-lg">Class: <span class="font-semibold">${classToBook.name}</span></p>
+                        <p class="mb-2 text-lg">Trainer: <span class="font-semibold text-cyan-400">${classToBook.trainer}</span></p>
+                        <p class="mb-6 text-2xl font-extrabold">Total: <span class="text-green-400">$${classToBook.price.toFixed(2)}</span></p>
+
+                        <!-- Simulated Payment Form -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-2" for="card-number">Card Number (Simulated)</label>
+                            <input type="text" id="card-number" class="w-full p-3 rounded-lg titan-input" value="4444 4444 4444 4444" readonly>
+                        </div>
+                        <div class="flex space-x-4 mb-6">
+                            <div>
+                                <label class="block text-sm font-medium mb-2" for="expiry">Expiry</label>
+                                <input type="text" id="expiry" class="w-full p-3 rounded-lg titan-input" value="12/26" readonly>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2" for="cvv">CVV</label>
+                                <input type="text" id="cvv" class="w-full p-3 rounded-lg titan-input" value="123" readonly>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between space-x-3">
+                            <button id="cancel-payment" class="w-1/2 bg-gray-600 hover:bg-gray-700 text-white py-3 rounded-lg font-bold transition">Cancel</button>
+                            <button id="confirm-payment" class="w-1/2 titan-btn py-3 rounded-lg font-bold" data-class-id="${classId}">PAY NOW</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+            document.getElementById('cancel-payment').addEventListener('click', () => {
+                document.getElementById('payment-modal-backdrop').remove();
+                showMessage("Payment cancelled.");
+            });
+
+            document.getElementById('confirm-payment').addEventListener('click', (e) => {
+                const confirmedClassId = e.target.getAttribute('data-class-id');
+                document.getElementById('payment-modal-backdrop').remove();
+                processBooking(confirmedClassId);
+            });
+        };
+
+
+
+        const renderApp = async () => {
+            if (currentUser) {
+                const success = await fetchAppData();
+                if (success) {
+                    if (currentUser.role === 'admin') {
+                        renderAdminDashboard();
+                    } else {
+                        renderUserDashboard();
+                    }
+                } else {
+                    renderLogin();
+                }
+            } else {
+                renderLandingPage();
+            }
+        };
+
+        window.onload = renderApp;
+    </script>
+</body>
+</html>
