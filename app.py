@@ -94,14 +94,20 @@ def api_login():
 
 @app.route('/api/register', methods=['POST'])
 def api_register():
-    """Registers a new user."""
+    """Registers a new user, allowing selection of 'user' or 'trainer' role."""
     details = request.json
     username = details.get('username')
     password = details.get('password')
+    # NEW: Get the selected role, default to 'user'
+    user_role = details.get('role', 'user') 
 
     if not username or not password or len(password) < 6:
         return jsonify({'message': 'Registration failed: Invalid input or password too short.'}), 400
 
+    # SECURITY CHECK: Only allow registration as 'user' or 'trainer'
+    if user_role not in ['user', 'trainer']:
+        user_role = 'user'
+    
     db = get_db()
     cursor = db.cursor()
     
@@ -111,9 +117,10 @@ def api_register():
 
     new_id = str(uuid.uuid4())
     try:
+        # NEW: Use the selected user_role
         cursor.execute(
-            "INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, 'user')",
-            (new_id, username, password)
+            "INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)",
+            (new_id, username, password, user_role)
         )
         db.commit()
         return jsonify({'message': 'Registration successful! You can now log in.'}), 201
@@ -123,7 +130,7 @@ def api_register():
 
 @app.route('/api/data', methods=['GET'])
 def get_all_data():
-    """Retrieves classes and the current user's bookings."""
+    """Retrieves classes, bookings, users, and calculates revenue for admin."""
     user = authenticate_user_from_header()
     db = get_db()
     cursor = db.cursor()
@@ -141,23 +148,45 @@ def get_all_data():
     
     all_bookings = []
     users_list = []
+    total_revenue = 0.0 # NEW: Initialize revenue
 
     if user:
         if user['role'] == 'admin':
+            # Admin fetches all bookings and all users
             cursor.execute("SELECT * FROM bookings")
             all_bookings = cursor.fetchall()
-            cursor.execute("SELECT id, username FROM users")
+            cursor.execute("SELECT id, username, role FROM users")
             users_list = cursor.fetchall()
-        else:
+
+            # NEW: Calculate Total Revenue for Admin
+            cursor.execute("""
+                SELECT SUM(T1.price) AS total_revenue
+                FROM classes T1
+                INNER JOIN bookings T2
+                ON T1.id = T2.classId
+                WHERE T2.status = 'confirmed'
+            """)
+            result = cursor.fetchone()
+            total_revenue = result['total_revenue'] if result and result['total_revenue'] is not None else 0.0
+
+        elif user['role'] == 'trainer':
+            # Trainer fetches their own bookings and basic user list
             cursor.execute("SELECT * FROM bookings WHERE userId = ?", (user['id'],))
             all_bookings = cursor.fetchall()
-            users_list = [{'id': user['id'], 'username': user['username']}]
-    
+            cursor.execute("SELECT id, username, role FROM users")
+            users_list = cursor.fetchall()
 
+        # Standard user fetches only their own bookings
+        else: # user['role'] == 'user'
+            cursor.execute("SELECT * FROM bookings WHERE userId = ?", (user['id'],))
+            all_bookings = cursor.fetchall()
+            users_list = [{'id': user['id'], 'username': user['username'], 'role': user['role']}]
+    
     return jsonify({
         'classes': classes_with_counts,
         'bookings': all_bookings,
-        'users': users_list
+        'users': users_list,
+        'totalRevenue': total_revenue # NEW: Include revenue
     }), 200
 
 
@@ -277,13 +306,46 @@ def api_cancel_booking(booking_id):
         return jsonify({'message': 'Cancellation failed due to database error.'}), 500
 
 
+@app.route('/api/user/<user_id>/set_role', methods=['PUT'])
+def api_set_user_role(user_id):
+    """Admin endpoint to change a user's role."""
+    user = authenticate_user_from_header()
+    
+    if not user or user['role'] != 'admin':
+        return jsonify({'message': 'Admin access required for user management.'}), 403
+    
+    # Prevents admin from demoting themselves (simple safety net)
+    if user_id == user['id']:
+        return jsonify({'message': 'Cannot change your own role via this endpoint.'}), 400
+
+    new_role = request.json.get('role')
+    if new_role not in ['user', 'trainer', 'admin']:
+        return jsonify({'message': 'Invalid role specified.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+
+    try:
+        cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if not cursor.fetchone():
+            return jsonify({'message': 'User not found.'}), 404
+
+        cursor.execute(
+            "UPDATE users SET role = ? WHERE id = ?",
+            (new_role, user_id)
+        )
+        db.commit()
+        return jsonify({'message': f"User role for {user_id} updated to '{new_role}' successfully."}), 200
+    except sqlite3.Error:
+        return jsonify({'message': 'Database error during role update.'}), 500
+
 
 @app.route('/api/class', methods=['POST'])
 def api_add_class():
-    """Adds a new class."""
+    """Adds a new class. Allowed for Admin or Trainer."""
     user = authenticate_user_from_header()
-    if not user or user['role'] != 'admin':
-        return jsonify({'message': 'Admin access required.'}), 403
+    if not user or user['role'] not in ['admin', 'trainer']:
+        return jsonify({'message': 'Admin or Trainer access required.'}), 403
 
     details = request.json
     db = get_db()
@@ -313,7 +375,7 @@ def api_add_class():
 
 @app.route('/api/class/<class_id>', methods=['DELETE'])
 def api_remove_class(class_id):
-    """Removes a class and cancels all associated bookings."""
+    """Removes a class and cancels all associated bookings. Admin only."""
     user = authenticate_user_from_header()
     if not user or user['role'] != 'admin':
         return jsonify({'message': 'Admin access required.'}), 403

@@ -1,4 +1,3 @@
-
 DROP TABLE IF EXISTS classes;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS bookings;
@@ -31,6 +30,11 @@ CREATE TABLE bookings (
 
 
 INSERT INTO users (id, username, password, role) VALUES ('admin-123', 'admin', 'admin', 'admin');
+
+-- New Trainer Accounts Added
+INSERT INTO users (id, username, password, role) VALUES ('trainer-alex', 'alexsmith', 'trainerpass', 'trainer');
+INSERT INTO users (id, username, password, role) VALUES ('trainer-maria', 'marialee', 'trainerpass', 'trainer');
+INSERT INTO users (id, username, password, role) VALUES ('trainer-basti', 'basticruz', 'trainerpass', 'trainer');
 
 INSERT INTO users (id, username, password, role) VALUES ('user-456', 'jhon', 'user123', 'user');
 
